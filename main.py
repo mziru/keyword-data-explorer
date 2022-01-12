@@ -1,19 +1,28 @@
-from flask import Flask
-from pywebio.input import select, input, TEXT, checkbox
-from pywebio.output import put_text, put_image, put_button, put_html
-from pywebio.platform.flask import webio_view
-import matplotlib.pyplot as plt
-import io
-from requests import Request, Session
-from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
-import json
-import pandas as pd
-import math
 import ast
+import io
+import json
+import math
+import os
+import re
+import gensim
+import gensim.corpora as corpora
+import nltk
+import pyLDAvis
+import pyLDAvis.gensim_models
+from gensim.utils import simple_preprocess
+from nltk.corpus import stopwords
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns
+from pywebio.input import select, input, TEXT
+from pywebio.output import put_text, put_image, put_html
+from pywebio.platform.flask import webio_view
+from requests import Session
+from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
 from wordcloud import WordCloud, STOPWORDS
-import ipyplot
+from flask import Flask
+nltk.download('stopwords')
 
 app = Flask(__name__)
 
@@ -143,6 +152,17 @@ def fix_list(value_list):
     return new_string
 
 
+def sent_to_words(sentences):
+    for sentence in sentences:
+        # deacc=True removes punctuations
+        yield (gensim.utils.simple_preprocess(str(sentence), deacc=True))
+
+
+def remove_stopwords(texts, stop_words):
+    return [[word for word in simple_preprocess(str(doc))
+             if word not in stop_words] for doc in texts]
+
+
 # ids = tmdb_keyword_query(['bike', 'bicycle', 'bmx'], '1a639c8e33a30017bb883bf46d80f183')
 def task_func():
     api_key = input("Enter TMDB API key：", type=TEXT, required=True)
@@ -173,11 +193,11 @@ def task_func():
         df = df[['genres', 'title', 'popularity', 'year', 'poster_path', 'overview', 'tagline']].sort_values('year')
         df['genres'] = df['genres'].apply(fix_list)
 
-        plt.style.use('bmh')
+        plt.style.use('seaborn-whitegrid')
 
         overall_freq = df['year'].value_counts().sort_index()
         fig, ax = plt.subplots()
-        fig.set_size_inches(20, 10)
+        fig.set_size_inches(9, 4.5)
         ax.plot(overall_freq.index, pd.Series(overall_freq.values).rolling(3).mean(), figure=fig)
 
         buf = io.BytesIO()
@@ -195,7 +215,7 @@ def task_func():
             unique_genres.remove('')
 
         fig, ax = plt.subplots()
-        fig.set_size_inches(20, 10)
+        fig.set_size_inches(9, 4.5)
 
         genre_percent_dict = {}
         for genre in unique_genres:
@@ -218,6 +238,8 @@ def task_func():
             percent_list.append(genre_percent_dict[genre])
 
         corrs = np.corrcoef(percent_list)
+        fig, ax = plt.subplots()
+        fig.set_size_inches(10, 7)
         sns.heatmap(corrs, linewidths=.5, xticklabels=genre_list, yticklabels=genre_list)
         plt.xticks(rotation=45)
 
@@ -227,7 +249,7 @@ def task_func():
         plt.clf()
 
         overview_words = ''
-        stopwords = set(STOPWORDS)
+        stopwords_set = set(STOPWORDS)
         text_cols = [
             # 'title',
             # 'tagline',
@@ -251,11 +273,11 @@ def task_func():
 
             wordcloud = WordCloud(width=1000, height=600,
                                   background_color='white',
-                                  stopwords=stopwords,
+                                  stopwords=stopwords_set,
                                   min_font_size=10).generate(overview_words)
 
             # plot the WordCloud image
-            fig = plt.figure(figsize=(8, 6), facecolor=None)
+            fig = plt.figure(figsize=(9, 4.5), facecolor=None)
             plt.imshow(wordcloud)
             plt.axis("off")
             plt.tight_layout(pad=0)
@@ -264,15 +286,74 @@ def task_func():
             fig.savefig(buf)
             put_image(buf.getvalue())
 
-            poster_df = df[df['poster_path'].notna()].sort_values('year')
-            poster_df = poster_df[['year', 'title', 'poster_path']].dropna()
-            poster_df['poster_path'] = poster_df['poster_path'].apply(
-                lambda x: 'https://image.tmdb.org/t/p/w200{}'.format(x))
+            # poster_df = df[df['poster_path'].notna()].sort_values('year')
+            # poster_df = poster_df[['year', 'title', 'poster_path']].dropna()
+            # poster_df['poster_path'] = poster_df['poster_path'].apply(
+            #     lambda x: 'https://image.tmdb.org/t/p/w200{}'.format(x))
+            #
+            # poster_df['year'] = poster_df['year'] // 10 * 10
+            # decades = poster_df['year'].unique()
+            #
+            # put_text(str(poster_df.value_counts('year', sort=False)))
 
-            poster_df['year'] = poster_df['year'] // 10 * 10
-            decades = poster_df['year'].unique()
+            # topic modeling
 
-            put_text(str(poster_df.value_counts('year', sort=False)))
+            text_data = df[['title', 'tagline', 'overview']].dropna()
+
+            # remove original keywords
+
+            # remove_string = '\w*{}\w*'.format(kw_list)
+            #
+            # text_data['overview_processed'] = text_data['overview'].map(
+            #     lambda x: re.sub(r'{}'.format(remove_string), '', x))
+            # Remove punctuation
+            text_data['overview_processed'] = text_data['overview'].map(lambda x: re.sub(r'[,\.!?]', '', x))
+            # Convert the titles to lowercase
+            text_data['overview_processed'] = text_data['overview_processed'].map(lambda x: x.lower())
+            # # Print out the first rows of papers
+            # text_data['overview_processed'].head()
+
+            stop_words = stopwords.words('english')
+            stop_words.extend(['from', 'subject', 're', 'edu', 'use'])
+
+            data = text_data['overview_processed'].values.tolist()
+            data_words = list(sent_to_words(data))
+
+            # remove stop words
+            data_words = remove_stopwords(data_words, stop_words)
+            put_text(data_words[:1][0][:30])
+
+            # Create Dictionary
+            id2word = corpora.Dictionary(data_words)
+            # Create Corpus
+            texts = data_words
+            # Term Document Frequency
+            corpus = [id2word.doc2bow(text) for text in texts]
+
+            # number of topics
+            num_topics = 10
+            # Build LDA model
+            lda_model = gensim.models.LdaMulticore(corpus=corpus,
+                                                   id2word=id2word,
+                                                   num_topics=num_topics)
+            # Print the Keyword in the 10 topics
+            # put_text(lda_model.print_topics())
+            doc_lda = lda_model[corpus]
+
+            # Visualize the topics
+            # pyLDAvis.enable_notebook()
+            LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
+            # # this is a bit time consuming - make the if statement True
+            # # if you want to execute visualization prep yourself
+
+            LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
+            # # this is a bit time consuming - make the if statement True
+            # # if you want to execute visualization prep yourself
+
+            LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+
+            LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
+            put_html(LDAvis_prepared, scope='ROOT').style('margin-left: 0px')
 
 
 app.add_url_rule('/', 'webio_view', webio_view(task_func),
