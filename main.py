@@ -4,30 +4,30 @@ import json
 import math
 import os
 import re
+
 import gensim
 import gensim.corpora as corpora
-import nltk
-import pyLDAvis
-import pyLDAvis.gensim_models
-from gensim.utils import simple_preprocess
-from nltk.corpus import stopwords
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pyLDAvis
+import pyLDAvis.gensim_models
 import seaborn as sns
+from gensim.utils import simple_preprocess
+from nltk.corpus import stopwords
 from pywebio.input import select, input, TEXT
 from pywebio.output import put_text, put_image, put_html
 from pywebio.platform.flask import webio_view
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
-from wordcloud import WordCloud, STOPWORDS
+from wordcloud import WordCloud
+
 from flask import Flask
-nltk.download('stopwords')
 
 app = Flask(__name__)
 
 
-# TMDB developer keys are available for free from TMDB: https://developers.themoviedb.org/3/getting-started/introduction
+# TMDB developer keys are available from TMDB: https://developers.themoviedb.org/3/getting-started/introduction
 
 def tmdb_keyword_query(kw_list, api_key):
     """
@@ -155,7 +155,7 @@ def fix_list(value_list):
 def sent_to_words(sentences):
     for sentence in sentences:
         # deacc=True removes punctuations
-        yield (gensim.utils.simple_preprocess(str(sentence), deacc=True))
+        yield gensim.utils.simple_preprocess(str(sentence), deacc=True)
 
 
 def remove_stopwords(texts, stop_words):
@@ -169,7 +169,7 @@ def task_func():
     keywords = input("Enter keywords: ", type=TEXT, required=True)
 
     ids = tmdb_keyword_query(keywords, api_key)
-    data_df = None
+
     proceed = select(label="Proceed?",
                      options=['Yes', 'No'])
 
@@ -190,7 +190,8 @@ def task_func():
         df = data_df.dropna(subset=['release_date'])
         df['release_date'] = pd.to_datetime(df['release_date'])
         df['year'] = df['release_date'].dt.year
-        df = df[['genres', 'title', 'popularity', 'year', 'poster_path', 'overview', 'tagline']].sort_values('year')
+        df = df[['genres', 'title', 'popularity', 'year', 'poster_path',
+                 'overview', 'tagline', 'original_language']].sort_values('year')
         df['genres'] = df['genres'].apply(fix_list)
 
         plt.style.use('seaborn-whitegrid')
@@ -199,6 +200,9 @@ def task_func():
         fig, ax = plt.subplots()
         fig.set_size_inches(9, 4.5)
         ax.plot(overall_freq.index, pd.Series(overall_freq.values).rolling(3).mean(), figure=fig)
+        plt.title('Films Released by Year')
+        plt.ylabel('Number of Films')
+        plt.xlabel('Release Year')
 
         buf = io.BytesIO()
         fig.savefig(buf)
@@ -216,6 +220,9 @@ def task_func():
 
         fig, ax = plt.subplots()
         fig.set_size_inches(9, 4.5)
+        plt.title('Historical Trends in Top Genres')
+        plt.ylabel('Percent of Films Released')
+        plt.xlabel('Release Year')
 
         genre_percent_dict = {}
         for genre in unique_genres:
@@ -239,99 +246,93 @@ def task_func():
 
         corrs = np.corrcoef(percent_list)
         fig, ax = plt.subplots()
-        fig.set_size_inches(10, 7)
-        sns.heatmap(corrs, linewidths=.5, xticklabels=genre_list, yticklabels=genre_list)
+        fig.set_size_inches(8, 7)
+        sns.heatmap(corrs, linewidths=.5, xticklabels=genre_list, yticklabels=genre_list, square=True)
         plt.xticks(rotation=45)
+        plt.yticks(rotation=0)
+        plt.title('Heatmap Showing Correlations Between Top Genres')
 
         buf = io.BytesIO()
         fig.savefig(buf)
         put_image(buf.getvalue())
         plt.clf()
 
-        overview_words = ''
-        stopwords_set = set(STOPWORDS)
-        text_cols = [
-            # 'title',
-            # 'tagline',
-            'overview'
-        ]
-        # iterate through the data
-        for col in text_cols:
-            for val in df[col]:
+        df_english = df[df['original_language'] == 'en']
+        text_data = df_english[['title', 'tagline', 'overview']].dropna()
 
-                # typecaste each val to string
-                val = str(val)
+        # Remove punctuation and quotes
+        text_data_processed = text_data.applymap(lambda x: re.sub(r'[,\'".!?]', '', x))
+        # Convert the titles to lowercase
+        text_data_processed = text_data_processed.applymap(lambda x: x.lower())
 
-                # split the value
-                tokens = val.split()
+        stop_words = stopwords.words('english')
+        stop_words_set = set(stop_words)
+        overview_long_string = ','.join(list(text_data_processed['overview'].values))
 
-                # Converts each token into lowercase
-                for i in range(len(tokens)):
-                    tokens[i] = tokens[i].lower()
+        wordcloud = WordCloud(width=400, height=200,
+                              background_color='white',
+                              stopwords=stop_words_set,
+                              min_font_size=10).generate(overview_long_string)
 
-                overview_words += " ".join(tokens) + " "
+        # plot the WordCloud image
+        fig = plt.figure(facecolor=None)
+        fig.set_size_inches(9, 4.5)
+        plt.imshow(wordcloud)
+        plt.axis("off")
+        # plt.tight_layout(pad=0)
+        plt.title('Word Cloud Based on Film Synopses')
 
-            wordcloud = WordCloud(width=1000, height=600,
-                                  background_color='white',
-                                  stopwords=stopwords_set,
-                                  min_font_size=10).generate(overview_words)
+        buf = io.BytesIO()
+        fig.savefig(buf)
+        put_image(buf.getvalue())
+        plt.clf()
 
-            # plot the WordCloud image
-            fig = plt.figure(figsize=(9, 4.5), facecolor=None)
-            plt.imshow(wordcloud)
-            plt.axis("off")
-            plt.tight_layout(pad=0)
+        # topic modeling
+        build_model = select(label='Would you like to build a topic model based on text data?',
+                             options=['Yes', 'No'])
 
-            buf = io.BytesIO()
-            fig.savefig(buf)
-            put_image(buf.getvalue())
+        if build_model == 'Yes':
+            remove_keywords = select(label='Exclude original keyword(s) from topics?',
+                                     options=['Yes', 'No'])
+            put_text('Exclude original keyword(s):', remove_keywords)
 
-            # poster_df = df[df['poster_path'].notna()].sort_values('year')
-            # poster_df = poster_df[['year', 'title', 'poster_path']].dropna()
-            # poster_df['poster_path'] = poster_df['poster_path'].apply(
-            #     lambda x: 'https://image.tmdb.org/t/p/w200{}'.format(x))
-            #
-            # poster_df['year'] = poster_df['year'] // 10 * 10
-            # decades = poster_df['year'].unique()
-            #
-            # put_text(str(poster_df.value_counts('year', sort=False)))
+            title_tagline = select(label='Incorporate movie titles and taglines when modeling topics?',
+                                   options=['Yes', 'No'])
+            put_text('Incorporate titles and taglines:', title_tagline)
 
-            # topic modeling
+            lemmatize_words = select(label='Lemmatize words?',
+                                     options=['Yes', 'No'])
+            put_text('Lemmatize words:', lemmatize_words)
 
-            text_data = df[['title', 'tagline', 'overview']].dropna()
+            num_topics = input('How many topics? (Default = 10)', type=TEXT, required=False)
+            num_topics = int(num_topics)
+            put_text('Number of topics:', num_topics)
+            put_text('Building and visualizing Latent Dirichlet allocation (LDA) model...')
+            # text_data = df[['title', 'tagline', 'overview']].dropna()
 
             # remove original keywords
 
             # remove_string = '\w*{}\w*'.format(kw_list)
             #
             # text_data['overview_processed'] = text_data['overview'].map(
-            #     lambda x: re.sub(r'{}'.format(remove_string), '', x))
-            # Remove punctuation
-            text_data['overview_processed'] = text_data['overview'].map(lambda x: re.sub(r'[,\.!?]', '', x))
-            # Convert the titles to lowercase
-            text_data['overview_processed'] = text_data['overview_processed'].map(lambda x: x.lower())
-            # # Print out the first rows of papers
-            # text_data['overview_processed'].head()
+            #     lambda x: re.sub(r'{}'.format('\w*robot\w*'), '', x))
 
-            stop_words = stopwords.words('english')
-            stop_words.extend(['from', 'subject', 're', 'edu', 'use'])
-
-            data = text_data['overview_processed'].values.tolist()
-            data_words = list(sent_to_words(data))
+            text_data_list = text_data_processed['overview'].values.tolist()
+            data_words = list(sent_to_words(text_data_list))
 
             # remove stop words
             data_words = remove_stopwords(data_words, stop_words)
-            put_text(data_words[:1][0][:30])
+            # put_text(data_words[:1][0][:30])
 
             # Create Dictionary
             id2word = corpora.Dictionary(data_words)
             # Create Corpus
             texts = data_words
-            # Term Document Frequency
+            # Term Frequency
             corpus = [id2word.doc2bow(text) for text in texts]
 
             # number of topics
-            num_topics = 10
+            # num_topics = 2
             # Build LDA model
             lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                                    id2word=id2word,
@@ -341,17 +342,9 @@ def task_func():
             doc_lda = lda_model[corpus]
 
             # Visualize the topics
-            # pyLDAvis.enable_notebook()
-            LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
-            # # this is a bit time consuming - make the if statement True
-            # # if you want to execute visualization prep yourself
 
             LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
-            # # this is a bit time consuming - make the if statement True
-            # # if you want to execute visualization prep yourself
-
             LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
-
             LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
             put_html(LDAvis_prepared, scope='ROOT').style('margin-left: 0px')
 
