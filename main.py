@@ -7,12 +7,15 @@ import re
 
 import gensim
 import gensim.corpora as corpora
+import spacy
+from gensim.models import phrases
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pyLDAvis
 import pyLDAvis.gensim_models
 import seaborn as sns
+from gensim.models import CoherenceModel
 from gensim.utils import simple_preprocess
 from nltk.corpus import stopwords
 from pywebio.input import select, input, TEXT
@@ -163,10 +166,21 @@ def remove_stopwords(texts, stop_words):
              if word not in stop_words] for doc in texts]
 
 
+def lemmatization(texts, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
+    """https://spacy.io/api/annotation"""
+    nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
+    texts_out = []
+    for sent in texts:
+        doc = nlp(" ".join(sent))
+        texts_out.append([token.lemma_ for token in doc if token.pos_ in allowed_postags])
+    return texts_out
+
+
 # ids = tmdb_keyword_query(['bike', 'bicycle', 'bmx'], '1a639c8e33a30017bb883bf46d80f183')
 def task_func():
     api_key = input("Enter TMDB API key：", type=TEXT, required=True)
     keywords = input("Enter keywords: ", type=TEXT, required=True)
+    keyword_list = keywords.split(',')
 
     ids = tmdb_keyword_query(keywords, api_key)
 
@@ -258,7 +272,7 @@ def task_func():
         plt.clf()
 
         df_english = df[df['original_language'] == 'en']
-        text_data = df_english[['title', 'tagline', 'overview']].dropna()
+        text_data = df_english[['title', 'tagline', 'overview']].dropna(subset=['overview'])
 
         # Remove punctuation and quotes
         text_data_processed = text_data.applymap(lambda x: re.sub(r'[,\'".!?]', '', x))
@@ -292,30 +306,16 @@ def task_func():
                              options=['Yes', 'No'])
 
         if build_model == 'Yes':
-            remove_keywords = select(label='Exclude original keyword(s) from topics?',
-                                     options=['Yes', 'No'])
-            put_text('Exclude original keyword(s):', remove_keywords)
-
-            title_tagline = select(label='Incorporate movie titles and taglines when modeling topics?',
-                                   options=['Yes', 'No'])
-            put_text('Incorporate titles and taglines:', title_tagline)
-
-            lemmatize_words = select(label='Lemmatize words?',
-                                     options=['Yes', 'No'])
-            put_text('Lemmatize words:', lemmatize_words)
-
-            num_topics = input('How many topics? (Default = 10)', type=TEXT, required=False)
-            num_topics = int(num_topics)
-            put_text('Number of topics:', num_topics)
             put_text('Building and visualizing Latent Dirichlet allocation (LDA) model...')
-            # text_data = df[['title', 'tagline', 'overview']].dropna()
 
             # remove original keywords
 
-            # remove_string = '\w*{}\w*'.format(kw_list)
-            #
-            # text_data['overview_processed'] = text_data['overview'].map(
-            #     lambda x: re.sub(r'{}'.format('\w*robot\w*'), '', x))
+            for keyword in keyword_list:
+                remove_string = '\w*' + keyword + '\w*'
+                text_data_processed = text_data_processed.applymap(
+                    lambda x: re.sub(r'{}'.format(remove_string), '', x))
+
+                text_data_processed = text_data_processed.applymap(lambda x: re.sub(r'{}'.format(remove_string), '', x))
 
             text_data_list = text_data_processed['overview'].values.tolist()
             data_words = list(sent_to_words(text_data_list))
@@ -323,6 +323,16 @@ def task_func():
             # remove stop words
             data_words = remove_stopwords(data_words, stop_words)
             # put_text(data_words[:1][0][:30])
+            bigram = gensim.models.Phrases(data_words, min_count=5, threshold=10)  # higher threshold fewer phrases.
+            trigram = gensim.models.Phrases(bigram[data_words], threshold=10)
+            bigram_model = gensim.models.phrases.Phraser(bigram)
+            trigram_model = gensim.models.phrases.Phraser(trigram)
+
+            data_words = [bigram_model[doc] for doc in data_words]
+            data_words = [trigram_model[bigram_model[doc]] for doc in data_words]
+
+            nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
+            data_words = lemmatization(data_words, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV'])
 
             # Create Dictionary
             id2word = corpora.Dictionary(data_words)
@@ -332,14 +342,14 @@ def task_func():
             corpus = [id2word.doc2bow(text) for text in texts]
 
             # number of topics
-            # num_topics = 2
+            num_topics = 7
             # Build LDA model
             lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                                    id2word=id2word,
                                                    num_topics=num_topics)
             # Print the Keyword in the 10 topics
             # put_text(lda_model.print_topics())
-            doc_lda = lda_model[corpus]
+            # doc_lda = lda_model[corpus]
 
             # Visualize the topics
 
@@ -347,6 +357,52 @@ def task_func():
             LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
             LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
             put_html(LDAvis_prepared, scope='ROOT').style('margin-left: 0px')
+
+            put_text('Scoring the model...')
+            coherence_model_lda = CoherenceModel(model=lda_model, texts=data_words, dictionary=id2word,
+                                                 coherence='c_v')
+            coherence_lda = coherence_model_lda.get_coherence()
+            put_text('Topic Coherence Score: ', coherence_lda)
+            # put_text('Perplexity Score (lower the better): ',
+            #          lda_model.log_perplexity(corpus))
+
+            find_optimal = select(label='Would you like to search for a more optimal number of topics? This takes a '
+                                        'while!',
+                                  options=['Yes', 'No'])
+            max_k = input('The application will automatically build and score models with the number of topics '
+                          'ranging from 1 to k_max. Select an integer value for k_max:')
+            max_k = int(max_k)
+
+            if find_optimal == 'Yes':
+                put_text('Building and scoring models with number of topics (k) between 1 and max_k...')
+                coherence_scores = []
+                for k in range(1, max_k + 1):
+                    num_topics = k
+                    lda_model = gensim.models.LdaMulticore(corpus=corpus,
+                                                           id2word=id2word,
+                                                           num_topics=num_topics)
+                    coherence_model_lda = CoherenceModel(model=lda_model,
+                                                         texts=data_words,
+                                                         dictionary=id2word,
+                                                         coherence='c_v')
+                    coherence_lda = coherence_model_lda.get_coherence()
+                    coherence_scores.append(coherence_lda)
+                    put_text('k =', k, '--->', coherence_lda)
+
+                fig, ax = plt.subplots()
+                fig.set_size_inches(9, 4.5)
+                ax.plot(range(1, max_k + 1), coherence_scores)
+                plt.xlabel("Number of Topics (k)")
+                plt.ylabel("Coherence Score")
+                plt.xticks(range(1, max_k + 1, 2))
+
+                buf = io.BytesIO()
+                fig.savefig(buf)
+                put_image(buf.getvalue())
+                plt.clf()
+
+                new_model = select(label='Would you like to tune k and build a new model?',
+                                   options=['Yes', 'No'])
 
 
 app.add_url_rule('/', 'webio_view', webio_view(task_func),
