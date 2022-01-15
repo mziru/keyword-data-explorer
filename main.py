@@ -399,13 +399,12 @@ def task_func():
                 new_model = select(label='Would you like to tune k and build a new model?',
                                    options=['Yes', 'No'])
                 if new_model == 'Yes':
-
                     num_topics = input('How many topics?', type=TEXT)
                     num_topics = int(num_topics)
 
                     put_text('Building and visualizing Latent Dirichlet allocation (LDA) model with',
                              num_topics, 'topics...')
-
+                    # TODO fix allignment
                     lda_modeling(corpus, id2word, data_words, num_topics=num_topics)
 
 
