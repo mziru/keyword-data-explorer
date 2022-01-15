@@ -176,7 +176,23 @@ def lemmatization(texts, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
     return texts_out
 
 
-# ids = tmdb_keyword_query(['bike', 'bicycle', 'bmx'], '1a639c8e33a30017bb883bf46d80f183')
+def lda_modeling(corpus, id2word, data_words, num_topics=10):
+    lda_model = gensim.models.LdaMulticore(corpus=corpus,
+                                           id2word=id2word,
+                                           num_topics=num_topics)
+
+    # LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
+    LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+    LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
+    put_html(LDAvis_prepared)
+
+    put_text('Scoring the model...')
+    coherence_model_lda = CoherenceModel(model=lda_model, texts=data_words, dictionary=id2word,
+                                         coherence='c_v')
+    coherence_lda = coherence_model_lda.get_coherence()
+    put_text('Topic Coherence Score: ', coherence_lda)
+
+
 def task_func():
     api_key = input("Enter TMDB API key：", type=TEXT, required=True)
     keywords = input("Enter keywords: ", type=TEXT, required=True)
@@ -272,7 +288,7 @@ def task_func():
         plt.clf()
 
         df_english = df[df['original_language'] == 'en']
-        text_data = df_english[['title', 'tagline', 'overview']].dropna(subset=['overview'])
+        text_data = df_english[['title', 'tagline', 'overview']].dropna(subset=['overview']).fillna('')
 
         # Remove punctuation and quotes
         text_data_processed = text_data.applymap(lambda x: re.sub(r'[,\'".!?]', '', x))
@@ -293,7 +309,6 @@ def task_func():
         fig.set_size_inches(9, 4.5)
         plt.imshow(wordcloud)
         plt.axis("off")
-        # plt.tight_layout(pad=0)
         plt.title('Word Cloud Based on Film Synopses')
 
         buf = io.BytesIO()
@@ -317,12 +332,15 @@ def task_func():
 
                 text_data_processed = text_data_processed.applymap(lambda x: re.sub(r'{}'.format(remove_string), '', x))
 
-            text_data_list = text_data_processed['overview'].values.tolist()
+            text_data_processed['combined'] = text_data_processed['title'] + ' ' + \
+                                              text_data_processed['tagline'] + ' ' + \
+                                              text_data_processed['overview']
+
+            text_data_list = text_data_processed['combined'].values.tolist()
             data_words = list(sent_to_words(text_data_list))
 
             # remove stop words
             data_words = remove_stopwords(data_words, stop_words)
-            # put_text(data_words[:1][0][:30])
             bigram = gensim.models.Phrases(data_words, min_count=5, threshold=10)  # higher threshold fewer phrases.
             trigram = gensim.models.Phrases(bigram[data_words], threshold=10)
             bigram_model = gensim.models.phrases.Phraser(bigram)
@@ -331,7 +349,7 @@ def task_func():
             data_words = [bigram_model[doc] for doc in data_words]
             data_words = [trigram_model[bigram_model[doc]] for doc in data_words]
 
-            nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
+            # nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
             data_words = lemmatization(data_words, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV'])
 
             # Create Dictionary
@@ -341,30 +359,7 @@ def task_func():
             # Term Frequency
             corpus = [id2word.doc2bow(text) for text in texts]
 
-            # number of topics
-            num_topics = 7
-            # Build LDA model
-            lda_model = gensim.models.LdaMulticore(corpus=corpus,
-                                                   id2word=id2word,
-                                                   num_topics=num_topics)
-            # Print the Keyword in the 10 topics
-            # put_text(lda_model.print_topics())
-            # doc_lda = lda_model[corpus]
-
-            # Visualize the topics
-
-            LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
-            LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
-            LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
-            put_html(LDAvis_prepared, scope='ROOT').style('margin-left: 0px')
-
-            put_text('Scoring the model...')
-            coherence_model_lda = CoherenceModel(model=lda_model, texts=data_words, dictionary=id2word,
-                                                 coherence='c_v')
-            coherence_lda = coherence_model_lda.get_coherence()
-            put_text('Topic Coherence Score: ', coherence_lda)
-            # put_text('Perplexity Score (lower the better): ',
-            #          lda_model.log_perplexity(corpus))
+            lda_modeling(corpus, id2word, data_words)
 
             find_optimal = select(label='Would you like to search for a more optimal number of topics? This takes a '
                                         'while!',
@@ -374,7 +369,7 @@ def task_func():
             max_k = int(max_k)
 
             if find_optimal == 'Yes':
-                put_text('Building and scoring models with number of topics (k) between 1 and max_k...')
+                put_text('Building and scoring models with number of topics (k) between 1 and', max_k)
                 coherence_scores = []
                 for k in range(1, max_k + 1):
                     num_topics = k
@@ -403,6 +398,15 @@ def task_func():
 
                 new_model = select(label='Would you like to tune k and build a new model?',
                                    options=['Yes', 'No'])
+                if new_model == 'Yes':
+
+                    num_topics = input('How many topics?', type=TEXT)
+                    num_topics = int(num_topics)
+
+                    put_text('Building and visualizing Latent Dirichlet allocation (LDA) model with',
+                             num_topics, 'topics...')
+
+                    lda_modeling(corpus, id2word, data_words, num_topics=num_topics)
 
 
 app.add_url_rule('/', 'webio_view', webio_view(task_func),
