@@ -19,7 +19,7 @@ from gensim.models import CoherenceModel
 from gensim.utils import simple_preprocess
 from nltk.corpus import stopwords
 from pywebio.input import select, input, TEXT
-from pywebio.output import put_text, put_image, put_html
+from pywebio.output import put_text, put_image, put_html, use_scope, remove
 from pywebio.platform.flask import webio_view
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
@@ -30,9 +30,9 @@ from flask import Flask
 app = Flask(__name__)
 
 
-# TMDB developer keys are available from TMDB: https://developers.themoviedb.org/3/getting-started/introduction
+# TMDB developer API keys are available from TMDB: https://developers.themoviedb.org/3/getting-started/introduction
 
-def tmdb_keyword_query(kw_list, api_key):
+def tmdb_keyword_query(kw_list: list, api_key: str) -> list:
     """
     Uses the TMDB Web API to generate list of movie ids based on keyword search.
     :param kw_list: list of keyword strings
@@ -116,12 +116,12 @@ def tmdb_keyword_query(kw_list, api_key):
     return id_list
 
 
-def build_dataset(id_list, api_key):
+def build_dataset(id_list: list, api_key: str) -> pd.DataFrame:
     """
     Builds dataset using TMDB web API
     :param id_list: list of TMDB unique ids
     :param api_key:
-    :return: Pandas Dataframe
+    :return: Pandas DataFrame
     """
 
     data_dict = {}
@@ -145,14 +145,133 @@ def build_dataset(id_list, api_key):
     return data_df
 
 
-def fix_list(value_list):
+def transform_categories(value_list: list) -> str:
+    """
+    Transforms categorical data (e.g. genres, production companies, production countries) into parsable strings.
+    :param value_list: list of dicts
+    :return: string with comma-delimited categories
+    """
     string = str(value_list)
     dicts_list = ast.literal_eval(string)
     string_list = []
     for d in dicts_list:
         string_list.append(d['name'])
     new_string = ','.join(string_list)
+
     return new_string
+
+
+def clean_data(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cleans data and returns selected columns.
+    :param data: Pandas DataFrame
+    :return: Pandas DataFrame, cleaned
+    """
+    df_releases = data.dropna(subset=['release_date'])
+    df_releases['release_date'] = pd.to_datetime(df_releases['release_date'])
+    df_releases['year'] = df_releases['release_date'].dt.year
+    df_select_cols = df_releases[['genres', 'title', 'popularity', 'year', 'poster_path',
+                                  'overview', 'tagline', 'original_language']].sort_values('year')
+    df_select_cols['genres'] = df_select_cols['genres'].apply(transform_categories)
+    df_clean = df_select_cols
+
+    return df_clean
+
+
+def plot_frequency(data: pd.DataFrame) -> pd.Series:
+    """
+    Plots the total number of films released per year and displays plot in browser.
+    :param data: Pandas DataFrame
+    :return: Pandas Series containing total number of films released, indexed by year.
+    """
+    plt.style.use('seaborn-whitegrid')
+
+    overall_freq = data['year'].value_counts().sort_index()
+    fig, ax = plt.subplots()
+    fig.set_size_inches(9, 4.5)
+    ax.plot(overall_freq.index, pd.Series(overall_freq.values).rolling(3).mean(), figure=fig)
+    plt.title('Films Released by Year')
+    plt.ylabel('Number of Films')
+    plt.xlabel('Release Year')
+
+    buf = io.BytesIO()
+    fig.savefig(buf)
+    put_image(buf.getvalue())
+    plt.clf()
+
+    return overall_freq
+
+
+def plot_genre_trends(data: pd.DataFrame, overall_freq: pd.Series, num_genres: int = 8) -> dict:
+    """
+    Plots number of movies released per year for each genre category as a percentage of total releases that year.
+    Displays plot in browser.
+
+    Note that movies are often tagged with multiple genres. This function counts values for unique genres and unique
+    genre COMBINATIONS before isolating the basic genres. This usually means that the number of unique values in the
+    output dictionary will be less than the number passed for num_genres.
+
+    :param data: Pandas DataFrame
+    :param overall_freq: Pandas Series containing total number of films released, indexed by year.
+    :param num_genres: number of unique genres
+    :return: dictionary of genre percents
+    """
+    top_genres = data['genres'].value_counts().head(num_genres).index
+    unique_genres = set(
+        ",".join(top_genres)
+            .strip()
+            .split(",")
+    )
+    if '' in unique_genres:
+        unique_genres.remove('')
+
+    fig, ax = plt.subplots()
+    fig.set_size_inches(9, 4.5)
+    plt.title('Historical Trends in Top Genres')
+    plt.ylabel('Percent of Films Released')
+    plt.xlabel('Release Year')
+
+    genre_percent_dict = {}
+    for genre in unique_genres:
+        genre_df = data[data['genres'].str.contains(genre)]
+        genre_freq = genre_df['year'].value_counts().sort_index()
+        genre_percent = (genre_freq / overall_freq * 100).fillna(0)
+        genre_percent_dict[genre] = genre_percent
+        ax.plot(overall_freq.index, genre_percent.rolling(7).mean(), label=genre)
+        ax.legend()
+
+    buf = io.BytesIO()
+    fig.savefig(buf)
+    put_image(buf.getvalue())
+    plt.clf()
+
+    return genre_percent_dict
+
+
+def map_correlations(genre_percents: dict):
+    """
+    Calculates correlations between genre percentages and displays heatmap in browser.
+    :param genre_percents: dictionary of genre percents
+    :return:
+    """
+    genre_list = []
+    percent_list = []
+    for genre in genre_percents:
+        genre_list.append(genre)
+        percent_list.append(genre_percents[genre])
+
+    corrs = np.corrcoef(percent_list)
+    fig, ax = plt.subplots()
+    fig.set_size_inches(8, 7)
+    sns.heatmap(corrs, linewidths=.5, xticklabels=genre_list, yticklabels=genre_list, square=True)
+    plt.xticks(rotation=45)
+    plt.yticks(rotation=0)
+    plt.title('Heatmap Showing Correlations Between Top Genres')
+
+    buf = io.BytesIO()
+    fig.savefig(buf)
+    put_image(buf.getvalue())
+    plt.clf()
 
 
 def sent_to_words(sentences):
@@ -166,8 +285,10 @@ def remove_stopwords(texts, stop_words):
              if word not in stop_words] for doc in texts]
 
 
-def lemmatization(texts, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
+def lemmatization(texts, allowed_postags=None):
     """https://spacy.io/api/annotation"""
+    if allowed_postags is None:
+        allowed_postags = ['NOUN', 'ADJ', 'VERB', 'ADV']
     nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
     texts_out = []
     for sent in texts:
@@ -176,12 +297,12 @@ def lemmatization(texts, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV']):
     return texts_out
 
 
+@use_scope('A', clear=True)
 def lda_modeling(corpus, id2word, data_words, num_topics=10):
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics)
 
-    # LDAvis_data_filepath = os.path.join('./ldavis_prepared_' + str(num_topics))
     LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
     LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
     put_html(LDAvis_prepared)
@@ -217,77 +338,16 @@ def task_func():
     if process == 'Automate in browser':
         put_text('Cleaning data and preparing visualizations...')
 
-        df = data_df.dropna(subset=['release_date'])
-        df['release_date'] = pd.to_datetime(df['release_date'])
-        df['year'] = df['release_date'].dt.year
-        df = df[['genres', 'title', 'popularity', 'year', 'poster_path',
-                 'overview', 'tagline', 'original_language']].sort_values('year')
-        df['genres'] = df['genres'].apply(fix_list)
+        # clean data
+        clean_df = clean_data(data_df)
 
-        plt.style.use('seaborn-whitegrid')
+        # visualize data
+        frequency = plot_frequency(clean_df)
+        genre_percent_dict = plot_genre_trends(clean_df, frequency)
+        map_correlations(genre_percent_dict)
 
-        overall_freq = df['year'].value_counts().sort_index()
-        fig, ax = plt.subplots()
-        fig.set_size_inches(9, 4.5)
-        ax.plot(overall_freq.index, pd.Series(overall_freq.values).rolling(3).mean(), figure=fig)
-        plt.title('Films Released by Year')
-        plt.ylabel('Number of Films')
-        plt.xlabel('Release Year')
 
-        buf = io.BytesIO()
-        fig.savefig(buf)
-        put_image(buf.getvalue())
-        plt.clf()
-
-        top_genres = df['genres'].value_counts().head(8).index
-        unique_genres = set(
-            ",".join(top_genres)
-                .strip()
-                .split(",")
-        )
-        if '' in unique_genres:
-            unique_genres.remove('')
-
-        fig, ax = plt.subplots()
-        fig.set_size_inches(9, 4.5)
-        plt.title('Historical Trends in Top Genres')
-        plt.ylabel('Percent of Films Released')
-        plt.xlabel('Release Year')
-
-        genre_percent_dict = {}
-        for genre in unique_genres:
-            genre_df = df[df['genres'].str.contains(genre)]
-            genre_freq = genre_df['year'].value_counts().sort_index()
-            genre_percent = (genre_freq / overall_freq * 100).fillna(0)
-            genre_percent_dict[genre] = genre_percent
-            ax.plot(overall_freq.index, genre_percent.rolling(7).mean(), label=genre)
-            ax.legend()
-
-        buf = io.BytesIO()
-        fig.savefig(buf)
-        put_image(buf.getvalue())
-        plt.clf()
-
-        genre_list = []
-        percent_list = []
-        for genre in genre_percent_dict:
-            genre_list.append(genre)
-            percent_list.append(genre_percent_dict[genre])
-
-        corrs = np.corrcoef(percent_list)
-        fig, ax = plt.subplots()
-        fig.set_size_inches(8, 7)
-        sns.heatmap(corrs, linewidths=.5, xticklabels=genre_list, yticklabels=genre_list, square=True)
-        plt.xticks(rotation=45)
-        plt.yticks(rotation=0)
-        plt.title('Heatmap Showing Correlations Between Top Genres')
-
-        buf = io.BytesIO()
-        fig.savefig(buf)
-        put_image(buf.getvalue())
-        plt.clf()
-
-        df_english = df[df['original_language'] == 'en']
+        df_english = clean_df[clean_df['original_language'] == 'en']
         text_data = df_english[['title', 'tagline', 'overview']].dropna(subset=['overview']).fillna('')
 
         # Remove punctuation and quotes
@@ -350,7 +410,7 @@ def task_func():
             data_words = [trigram_model[bigram_model[doc]] for doc in data_words]
 
             # nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
-            data_words = lemmatization(data_words, allowed_postags=['NOUN', 'ADJ', 'VERB', 'ADV'])
+            data_words = lemmatization(data_words, allowed_postags=['NOUN'])  # 'ADJ', 'VERB', 'ADV'
 
             # Create Dictionary
             id2word = corpora.Dictionary(data_words)
@@ -396,16 +456,17 @@ def task_func():
                 put_image(buf.getvalue())
                 plt.clf()
 
-                new_model = select(label='Would you like to tune k and build a new model?',
-                                   options=['Yes', 'No'])
-                if new_model == 'Yes':
-                    num_topics = input('How many topics?', type=TEXT)
-                    num_topics = int(num_topics)
+            new_model = select(label='Would you like to tune k and build a new model?',
+                               options=['Yes', 'No'])
+            if new_model == 'Yes':
+                num_topics = input('How many topics?', type=TEXT)
+                num_topics = int(num_topics)
 
-                    put_text('Building and visualizing Latent Dirichlet allocation (LDA) model with',
-                             num_topics, 'topics...')
-                    # TODO fix allignment
-                    lda_modeling(corpus, id2word, data_words, num_topics=num_topics)
+                put_text('Building and visualizing Latent Dirichlet allocation (LDA) model with',
+                         num_topics, 'topics...')
+                # TODO fix alignment
+
+                lda_modeling(corpus, id2word, data_words, num_topics=num_topics)
 
 
 app.add_url_rule('/', 'webio_view', webio_view(task_func),
