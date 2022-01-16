@@ -2,24 +2,23 @@ import ast
 import io
 import json
 import math
-import os
 import re
+from typing import NoReturn
 
 import gensim
 import gensim.corpora as corpora
-import spacy
-from gensim.models import phrases
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pyLDAvis
 import pyLDAvis.gensim_models
 import seaborn as sns
+import spacy
+from gensim.corpora import Dictionary
 from gensim.models import CoherenceModel
-from gensim.utils import simple_preprocess
 from nltk.corpus import stopwords
 from pywebio.input import select, input, TEXT
-from pywebio.output import put_text, put_image, put_html, use_scope, remove
+from pywebio.output import put_text, put_image, put_html
 from pywebio.platform.flask import webio_view
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
@@ -184,9 +183,10 @@ def plot_frequency(data: pd.DataFrame) -> pd.Series:
     :param data: Pandas DataFrame
     :return: Pandas Series containing total number of films released, indexed by year.
     """
+    overall_freq = data['year'].value_counts().sort_index()
+
     plt.style.use('seaborn-whitegrid')
 
-    overall_freq = data['year'].value_counts().sort_index()
     fig, ax = plt.subplots()
     fig.set_size_inches(9, 4.5)
     ax.plot(overall_freq.index, pd.Series(overall_freq.values).rolling(3).mean(), figure=fig)
@@ -208,7 +208,7 @@ def plot_genre_trends(data: pd.DataFrame, overall_freq: pd.Series, num_genres: i
     Displays plot in browser.
 
     Note that movies are often tagged with multiple genres. This function counts values for unique genres and unique
-    genre COMBINATIONS before isolating the basic genres. This usually means that the number of unique values in the
+    genre COMBINATIONS before isolating the basic genres. This usually means that the number of keys in the
     output dictionary will be less than the number passed for num_genres.
 
     :param data: Pandas DataFrame
@@ -224,6 +224,8 @@ def plot_genre_trends(data: pd.DataFrame, overall_freq: pd.Series, num_genres: i
     )
     if '' in unique_genres:
         unique_genres.remove('')
+
+    plt.style.use('seaborn-whitegrid')
 
     fig, ax = plt.subplots()
     fig.set_size_inches(9, 4.5)
@@ -248,7 +250,7 @@ def plot_genre_trends(data: pd.DataFrame, overall_freq: pd.Series, num_genres: i
     return genre_percent_dict
 
 
-def map_correlations(genre_percents: dict):
+def map_correlations(genre_percents: dict) -> NoReturn:
     """
     Calculates correlations between genre percentages and displays heatmap in browser.
     :param genre_percents: dictionary of genre percents
@@ -274,31 +276,133 @@ def map_correlations(genre_percents: dict):
     plt.clf()
 
 
-def sent_to_words(sentences):
-    for sentence in sentences:
-        # deacc=True removes punctuations
-        yield gensim.utils.simple_preprocess(str(sentence), deacc=True)
+def pre_process_text(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Takes full dataset and returns DataFrame of English only text data with capitalization and punctuation removed.
+    :param data: complete dataset
+    :return: Pandas DataFrame with preprocessed text data
+    """
+
+    df_english = data[data['original_language'] == 'en']
+    # select text columns
+    text_data = df_english[['title', 'tagline', 'overview']].dropna(subset=['overview']).fillna('')
+    # Remove punctuation and quotes
+    text_df_preprocessed = text_data.applymap(lambda x: re.sub(r'[,\'".!?]', '', x))
+    # Convert to lowercase
+    text_df_preprocessed = text_df_preprocessed.applymap(lambda x: x.lower())
+
+    return text_df_preprocessed
 
 
-def remove_stopwords(texts, stop_words):
-    return [[word for word in simple_preprocess(str(doc))
-             if word not in stop_words] for doc in texts]
+def make_wordcloud(preprocessed_text: pd.DataFrame) -> NoReturn:
+    """
+    Takes preprocessed text DataFrame and displays wordcloud based on movie synopses (from the 'overview' column)
+    :param preprocessed_text:
+    :return:
+    """
+    stop_words = stopwords.words('english')
+    stop_words_set = set(stop_words)
+    overview_long_string = ','.join(list(preprocessed_text['overview'].values))
+
+    wordcloud = WordCloud(width=400, height=200,
+                          background_color='white',
+                          stopwords=stop_words_set,
+                          min_font_size=10).generate(overview_long_string)
+
+    # plot the WordCloud image
+    fig = plt.figure(facecolor=None)
+    fig.set_size_inches(9, 4.5)
+    plt.imshow(wordcloud)
+    plt.axis("off")
+    plt.title('Word Cloud Based on Film Synopses')
+
+    buf = io.BytesIO()
+    fig.savefig(buf)
+    put_image(buf.getvalue())
+    plt.clf()
 
 
-def lemmatization(texts, allowed_postags=None):
-    """https://spacy.io/api/annotation"""
+def lemmatize_words(tokenized_data: list, allowed_postags: list = None) -> list:
+    """
+    Takes tokenized text data and returns lemmas.
+    :param tokenized_data:
+    :param allowed_postags: optional - specify parts of speach to allow. see Spacy documentation for more info:
+    https://spacy.io/api/data-formats
+    :return: lemmatized tokens
+    """
     if allowed_postags is None:
         allowed_postags = ['NOUN', 'ADJ', 'VERB', 'ADV']
     nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
-    texts_out = []
-    for sent in texts:
-        doc = nlp(" ".join(sent))
-        texts_out.append([token.lemma_ for token in doc if token.pos_ in allowed_postags])
-    return texts_out
+    lemmatized_words = []
+    for s in tokenized_data:
+        doc = nlp(" ".join(s))
+        lemmatized_words.append([token.lemma_ for token in doc if token.pos_ in allowed_postags])
+
+    return lemmatized_words
 
 
-@use_scope('A', clear=True)
-def lda_modeling(corpus, id2word, data_words, num_topics=10):
+def process_text(preprocessed_text: pd.DataFrame, remove_words: list) -> \
+        tuple[list[list[tuple[int, int]]], Dictionary, list]:
+    """
+    Takes preprocessed text data and processes it for LDA modeling.
+    :param preprocessed_text:
+    :param remove_words: list of keywords to remove
+    :return:
+    """
+
+    # remove original keyword(s)
+    for keyword in remove_words:
+        remove_string = '\w*' + keyword + '\w*'
+        preprocessed_text = preprocessed_text.applymap(
+            lambda x: re.sub(r'{}'.format(remove_string), '', x))
+
+        preprocessed_text = preprocessed_text.applymap(
+            lambda x: re.sub(r'{}'.format(remove_string), '', x))
+
+    # combine text columns
+    preprocessed_text['combined'] = preprocessed_text['title'] + ' ' + \
+                                    preprocessed_text['tagline'] + ' ' + \
+                                    preprocessed_text['overview']
+
+    # tokenize text
+    text_data_list = preprocessed_text['combined'].values.tolist()
+    data_tokenized = [gensim.utils.simple_preprocess(str(doc), deacc=True) for doc in text_data_list]
+
+    # remove stop words
+    stop_words = stopwords.words('english')
+    data_tokenized = [[word for word in doc if word not in stop_words] for doc in data_tokenized]
+
+    # identify phrases
+    bigram = gensim.models.Phrases(data_tokenized, min_count=5, threshold=10)  # higher threshold fewer phrases.
+    trigram = gensim.models.Phrases(bigram[data_tokenized], threshold=10)
+    bigram_model = gensim.models.phrases.Phraser(bigram)
+    trigram_model = gensim.models.phrases.Phraser(trigram)
+    data_tokenized = [bigram_model[doc] for doc in data_tokenized]
+    data_tokenized = [trigram_model[bigram_model[doc]] for doc in data_tokenized]
+
+    # lemmatize words
+    data_tokenized = lemmatize_words(data_tokenized)
+
+    # Create Dictionary
+    id2word = corpora.Dictionary(data_tokenized)
+
+    # Create Corpus
+    # Convert each document into bag-of-words format, i.e. a list of tuples in the form (token_id, token_count)
+    corpus = [id2word.doc2bow(doc) for doc in data_tokenized]
+
+    return corpus, id2word, data_tokenized
+
+
+def lda_modeling(corpus: list, id2word: Dictionary, data_tokenized: list, num_topics: int = 10) -> NoReturn:
+    """
+    Takes Corpus, Dictionary, tokenized data, and number of topics; builds LDA model and displays
+    interactive visualization in browser.
+    :param corpus:
+    :param id2word:
+    :param data_tokenized:
+    :param num_topics:
+    :return:
+    """
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics)
@@ -308,13 +412,53 @@ def lda_modeling(corpus, id2word, data_words, num_topics=10):
     put_html(LDAvis_prepared)
 
     put_text('Scoring the model...')
-    coherence_model_lda = CoherenceModel(model=lda_model, texts=data_words, dictionary=id2word,
+    coherence_model_lda = CoherenceModel(model=lda_model, texts=data_tokenized, dictionary=id2word,
                                          coherence='c_v')
     coherence_lda = coherence_model_lda.get_coherence()
     put_text('Topic Coherence Score: ', coherence_lda)
 
 
-def task_func():
+def plot_scores(corpus: list, id2word: Dictionary, data_tokenized: list, max_k: int) -> NoReturn:
+    """
+    Takes Corpus, Dictionary, tokenized data, and maximum number of topics (specified by user). Builds and scores an
+    LDA model for each k between 1 and the maximum specified. Displays plot of the coherence scores.
+    :param corpus:
+    :param id2word:
+    :param data_tokenized:
+    :param max_k:
+    :return:
+    """
+    coherence_scores = []
+    for k in range(1, max_k + 1):
+        num_topics = k
+        lda_model = gensim.models.LdaMulticore(corpus=corpus,
+                                               id2word=id2word,
+                                               num_topics=num_topics)
+        coherence_model_lda = CoherenceModel(model=lda_model,
+                                             texts=data_tokenized,
+                                             dictionary=id2word,
+                                             coherence='c_v')
+        coherence_lda = coherence_model_lda.get_coherence()
+        coherence_scores.append(coherence_lda)
+        put_text('k =', k, '--->', coherence_lda)
+
+    fig, ax = plt.subplots()
+    fig.set_size_inches(9, 4.5)
+    ax.plot(range(1, max_k + 1), coherence_scores)
+    plt.xlabel("Number of Topics (k)")
+    plt.ylabel("Coherence Score")
+    plt.xticks(range(1, max_k + 1, 2))
+
+    buf = io.BytesIO()
+    fig.savefig(buf)
+    put_image(buf.getvalue())
+    plt.clf()
+
+
+def task_func() -> NoReturn:
+    """
+    Film Data Explorer
+    """
     api_key = input("Enter TMDB API key：", type=TEXT, required=True)
     keywords = input("Enter keywords: ", type=TEXT, required=True)
     keyword_list = keywords.split(',')
@@ -346,127 +490,49 @@ def task_func():
         genre_percent_dict = plot_genre_trends(clean_df, frequency)
         map_correlations(genre_percent_dict)
 
+        # isolate text data and preprocess it
+        text_df_preprocessed = pre_process_text(clean_df)
 
-        df_english = clean_df[clean_df['original_language'] == 'en']
-        text_data = df_english[['title', 'tagline', 'overview']].dropna(subset=['overview']).fillna('')
-
-        # Remove punctuation and quotes
-        text_data_processed = text_data.applymap(lambda x: re.sub(r'[,\'".!?]', '', x))
-        # Convert the titles to lowercase
-        text_data_processed = text_data_processed.applymap(lambda x: x.lower())
-
-        stop_words = stopwords.words('english')
-        stop_words_set = set(stop_words)
-        overview_long_string = ','.join(list(text_data_processed['overview'].values))
-
-        wordcloud = WordCloud(width=400, height=200,
-                              background_color='white',
-                              stopwords=stop_words_set,
-                              min_font_size=10).generate(overview_long_string)
-
-        # plot the WordCloud image
-        fig = plt.figure(facecolor=None)
-        fig.set_size_inches(9, 4.5)
-        plt.imshow(wordcloud)
-        plt.axis("off")
-        plt.title('Word Cloud Based on Film Synopses')
-
-        buf = io.BytesIO()
-        fig.savefig(buf)
-        put_image(buf.getvalue())
-        plt.clf()
+        # create and display wordcloud
+        make_wordcloud(text_df_preprocessed)
 
         # topic modeling
+
         build_model = select(label='Would you like to build a topic model based on text data?',
                              options=['Yes', 'No'])
 
         if build_model == 'Yes':
             put_text('Building and visualizing Latent Dirichlet allocation (LDA) model...')
 
-            # remove original keywords
-
-            for keyword in keyword_list:
-                remove_string = '\w*' + keyword + '\w*'
-                text_data_processed = text_data_processed.applymap(
-                    lambda x: re.sub(r'{}'.format(remove_string), '', x))
-
-                text_data_processed = text_data_processed.applymap(lambda x: re.sub(r'{}'.format(remove_string), '', x))
-
-            text_data_processed['combined'] = text_data_processed['title'] + ' ' + \
-                                              text_data_processed['tagline'] + ' ' + \
-                                              text_data_processed['overview']
-
-            text_data_list = text_data_processed['combined'].values.tolist()
-            data_words = list(sent_to_words(text_data_list))
-
-            # remove stop words
-            data_words = remove_stopwords(data_words, stop_words)
-            bigram = gensim.models.Phrases(data_words, min_count=5, threshold=10)  # higher threshold fewer phrases.
-            trigram = gensim.models.Phrases(bigram[data_words], threshold=10)
-            bigram_model = gensim.models.phrases.Phraser(bigram)
-            trigram_model = gensim.models.phrases.Phraser(trigram)
-
-            data_words = [bigram_model[doc] for doc in data_words]
-            data_words = [trigram_model[bigram_model[doc]] for doc in data_words]
-
-            # nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
-            data_words = lemmatization(data_words, allowed_postags=['NOUN'])  # 'ADJ', 'VERB', 'ADV'
-
-            # Create Dictionary
-            id2word = corpora.Dictionary(data_words)
-            # Create Corpus
-            texts = data_words
-            # Term Frequency
-            corpus = [id2word.doc2bow(text) for text in texts]
-
-            lda_modeling(corpus, id2word, data_words)
+            # process text and generate topic model
+            corpus, id2word, data_tokenized = process_text(text_df_preprocessed, keyword_list)
+            lda_modeling(corpus, id2word, data_tokenized)
 
             find_optimal = select(label='Would you like to search for a more optimal number of topics? This takes a '
                                         'while!',
                                   options=['Yes', 'No'])
-            max_k = input('The application will automatically build and score models with the number of topics '
-                          'ranging from 1 to k_max. Select an integer value for k_max:')
-            max_k = int(max_k)
 
             if find_optimal == 'Yes':
-                put_text('Building and scoring models with number of topics (k) between 1 and', max_k)
-                coherence_scores = []
-                for k in range(1, max_k + 1):
-                    num_topics = k
-                    lda_model = gensim.models.LdaMulticore(corpus=corpus,
-                                                           id2word=id2word,
-                                                           num_topics=num_topics)
-                    coherence_model_lda = CoherenceModel(model=lda_model,
-                                                         texts=data_words,
-                                                         dictionary=id2word,
-                                                         coherence='c_v')
-                    coherence_lda = coherence_model_lda.get_coherence()
-                    coherence_scores.append(coherence_lda)
-                    put_text('k =', k, '--->', coherence_lda)
+                max_k = select(label='Select maximum number of topics:',
+                               options=[int(i) for i in [1, 2, 3]])
 
-                fig, ax = plt.subplots()
-                fig.set_size_inches(9, 4.5)
-                ax.plot(range(1, max_k + 1), coherence_scores)
-                plt.xlabel("Number of Topics (k)")
-                plt.ylabel("Coherence Score")
-                plt.xticks(range(1, max_k + 1, 2))
+                put_text('Building and scoring models with number of topics (k) between 1 and', max_k, '...')
 
-                buf = io.BytesIO()
-                fig.savefig(buf)
-                put_image(buf.getvalue())
-                plt.clf()
+                plot_scores(corpus, id2word, data_tokenized, max_k)
 
-            new_model = select(label='Would you like to tune k and build a new model?',
-                               options=['Yes', 'No'])
-            if new_model == 'Yes':
-                num_topics = input('How many topics?', type=TEXT)
-                num_topics = int(num_topics)
+                new_model = select(label='Would you like to tune k and build a new model?',
+                                   options=['Yes', 'No'])
 
-                put_text('Building and visualizing Latent Dirichlet allocation (LDA) model with',
-                         num_topics, 'topics...')
-                # TODO fix alignment
+                if new_model == 'Yes':
+                    num_topics = select(label='How many topics?',
+                                        options=[int(i) for i in range(1, 31)])
+                    num_topics = int(num_topics)
 
-                lda_modeling(corpus, id2word, data_words, num_topics=num_topics)
+                    put_text('Building and visualizing Latent Dirichlet allocation (LDA) model with',
+                             num_topics, 'topics...')
+                    # TODO fix alignment
+
+                    lda_modeling(corpus, id2word, data_tokenized, num_topics=num_topics)
 
 
 app.add_url_rule('/', 'webio_view', webio_view(task_func),
