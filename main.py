@@ -5,15 +5,17 @@ import math
 import re
 from typing import NoReturn
 
-import gensim
-import gensim.corpora as corpora
-import matplotlib.pyplot as plt
+
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import pyLDAvis
 import pyLDAvis.gensim_models
 import seaborn as sns
+from wordcloud import WordCloud
 import spacy
+import gensim
+import gensim.corpora as corpora
 from gensim.corpora import Dictionary
 from gensim.models import CoherenceModel
 from nltk.corpus import stopwords
@@ -22,7 +24,7 @@ from pywebio.output import put_text, put_image, put_html
 from pywebio.platform.flask import webio_view
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
-from wordcloud import WordCloud
+
 
 from flask import Flask
 
