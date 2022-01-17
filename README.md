@@ -23,10 +23,24 @@ Next, a heatmap showing correlations between broad genre categories. (It makes s
 
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/heatmap.png?raw=true" width="600">
 
-Before training a model, the app does some light language processing and displays a word cloud, which shows the relative frequencies of words across all of the movie synopses (and validates, in this case, that 'alien' appears most frequently.)
+Before training a model, the app does some lightweight language processing and displays a word cloud, which shows the relative frequencies of words across all of the movie synopses (and validates, in this case, that 'alien' appears most frequently.)
 
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/word_cloud.png?raw=true" width="600">
+
+The user now has the option to train a topic model in order to try to uncover "latent" semantic structures in the language data that might be of more interpretive value than the basic genre categories. Latent Dirichlet allocation is an unsupervised machine learning technique; the only parameter that must be specified is the number of topics (k). The first model uses k=10 by default. The user will be able to specify other values for k after the default model is trained and scored.
+Before training, the language data goes through a few more processing steps to
+-	remove the original keywords,
+-	combine the text of titles, taglines, and synopses into a single document for each movie in the dataset,
+-	identify phrases (bigrams and trigrams),
+-	lemmatize words,
+-	and build a dictionary and corpus to use for modeling.
+
+Once the model-training is complete, the app leverages the PyLDAvis library to create an interactive visualization within the browser to help the user interpret the topics.
+
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/lda_viz.png?raw=true" width="600">
+
+The user then has the option to try to find a more optimal number of topics by iterating through values for k (up to a maximum specified by the user), training a separate model for each k, and plotting a topic coherence score for each model. (Note that, in this example, the CV score was used to measure coherence, since it is Gensim's default metric, but other metrics are available.) 
+
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/coherence_plot.png?raw=true" width="600">
 
 
