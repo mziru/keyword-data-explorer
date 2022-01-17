@@ -210,7 +210,7 @@ def plot_genre_trends(data: pd.DataFrame, overall_freq: pd.Series, num_genres: i
     Displays plot in browser.
 
     Note that movies are often tagged with multiple genres. This function counts values for unique genres and unique
-    genre COMBINATIONS before isolating the basic genres. This usually means that the number of keys in the
+    genre COMBINATIONS before isolating the basic genres. This usually means that the number of values in the
     output dictionary will be less than the number passed for num_genres.
 
     :param data: Pandas DataFrame
@@ -358,8 +358,8 @@ def process_text(preprocessed_text: pd.DataFrame, remove_words: list) -> \
         preprocessed_text = preprocessed_text.applymap(
             lambda x: re.sub(r'{}'.format(remove_string), '', x))
 
-        preprocessed_text = preprocessed_text.applymap(
-            lambda x: re.sub(r'{}'.format(remove_string), '', x))
+        # preprocessed_text = preprocessed_text.applymap(
+        #     lambda x: re.sub(r'{}'.format(remove_string), '', x))
 
     # combine text columns
     preprocessed_text['combined'] = preprocessed_text['title'] + ' ' + \
@@ -385,10 +385,10 @@ def process_text(preprocessed_text: pd.DataFrame, remove_words: list) -> \
     # lemmatize words
     data_tokenized = lemmatize_words(data_tokenized)
 
-    # Create Dictionary
+    # create Dictionary
     id2word = corpora.Dictionary(data_tokenized)
 
-    # Create Corpus
+    # create Corpus
     # Convert each document into bag-of-words format, i.e. a list of tuples in the form (token_id, token_count)
     corpus = [id2word.doc2bow(doc) for doc in data_tokenized]
 
@@ -409,9 +409,9 @@ def lda_modeling(corpus: list, id2word: Dictionary, data_tokenized: list, num_to
                                            id2word=id2word,
                                            num_topics=num_topics)
 
-    LDAvis_prepared = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
-    LDAvis_prepared = pyLDAvis.prepared_data_to_html(LDAvis_prepared)
-    put_html(LDAvis_prepared)
+    lda_vis = pyLDAvis.gensim_models.prepare(lda_model, corpus, id2word)
+    lda_vis = pyLDAvis.prepared_data_to_html(lda_vis)
+    put_html(lda_vis)
 
     put_text('Scoring the model...')
     coherence_model_lda = CoherenceModel(model=lda_model, texts=data_tokenized, dictionary=id2word,
