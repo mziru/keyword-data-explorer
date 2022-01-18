@@ -3,7 +3,7 @@ A web application for wrangling, exploring, and modeling movie data based on key
 
 The app leverages the open-source Gensim API for unsupervised semantic modeling. It uses the open-source TMDB web API to generate a custom dataset based on user input keyword(s), automatically cleans the data, outputs some exploratory visualizations, and gives the user options to train, visualize, and tune a Latent Dirichlet allocation (LDA) topic model based on natural language data (titles, taglines, and synopses).
 
-Note: this is a work in progress with basic functionality and a rudimentary PyWebIO UI for now. Some ideas for improvement: more interactive visualizations, more hyperparameter tuning within the browser interface, options to download/export processed data and models, some different ways to visualize and explore the topic groupings--e.g. to see more clearly how the "latent" semantic structures revealed by the model can be interpreted.  
+Note: this is a work in progress with basic functionality and a rudimentary PyWebIO UI for now.
 
 Below is some sample output based on a query using the keyword 'alien':
 
@@ -39,9 +39,13 @@ Once the model-training is complete, the app leverages the PyLDAvis library to c
 
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/lda_viz.png?raw=true" width="600">
 
-The user then has the option to try to find a more optimal number of topics by iterating through values for k (up to a maximum specified by the user), training a separate model for each k, and plotting a topic coherence score for each model. (Note that, in this example, the CV score was used to measure coherence, since it is Gensim's default metric, but other metrics are available.) 
+The user then has the option to try to find a more optimal number of topics by iterating through values for k (up to a maximum specified by the user), training a separate model for each k, and plotting a topic coherence score for each model. (Note that, in this example, the CV score was used to measure coherence becasue it is Gensim's default metric, but other metrics are available.) 
 
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/coherence_plot.png?raw=true" width="600">
+
+The user can now train and visualize a new model with a custom k. In this case, the "elbow" heuristic suggests that 7 would be a more optimal number of topics than the default of 10.
+
+That's all for now! Some ideas for future improvements: more interactive visualizations, more hyperparameter tuning within the browser interface, options to download/export processed data and models, some different ways to visualize and explore the topic groupings--e.g. to see more clearly how the "latent" semantic structures revealed by the model can be interpreted.  
 
 
 
