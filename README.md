@@ -23,7 +23,7 @@ Next, a heatmap showing correlations between broad genre categories. (It makes s
 
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/heatmap.png?raw=true" width="600">
 
-Before training a model, the app does some lightweight language processing and displays a word cloud, which shows the relative frequencies of words across all of the movie synopses (and validates, in this case, that 'alien' appears most frequently.)
+Before training a model, the app does some initial language processing and displays a word cloud, which shows the relative frequencies of words across all of the movie synopses (and validates, in this case, that 'alien' appears most frequently.)
 
 <img src="https://github.com/mziru/movie-keyword-data-explorer/blob/master/readme%20images/word_cloud.png?raw=true" width="600">
 
@@ -45,7 +45,7 @@ The user then has the option to try to find a more optimal number of topics by i
 
 The user can now train and visualize a new model with a custom k. In this case, the "elbow" heuristic suggests that 7 would be a more optimal number of topics than the default of 10.
 
-That's all for now! Some ideas for future improvements: more interactive visualizations, more hyperparameter tuning within the browser interface, options to download/export processed data and models, some different ways to visualize and explore the topic groupings--e.g. to see more clearly how the "latent" semantic structures revealed by the model can be interpreted.  
+That's all for now! Some ideas for future improvements: more interactive visualizations, more hyperparameter tuning within the browser interface, options to download/export processed data and models, some different ways to visualize and explore the topic groupings--e.g. to see more clearly how the latent semantic structures revealed by the model can be interpreted.  
 
 
 
