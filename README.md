@@ -6,7 +6,7 @@ The app uses the open-source TMDB web API to generate a custom dataset based on 
 Technologies:
 - Natural Language Processing and Modeling:
    -	Gensim
-   -	Spacy 
+   -	spaCy 
    -	NLTK
 - Visualizations:
     -	pyLDAvis
